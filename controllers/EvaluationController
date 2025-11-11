@@ -1,0 +1,288 @@
+<?php
+namespace App\Http\Controllers;
+
+use App\Models\Evaluation;
+use App\Models\EvaluationQuestion; // Correction du namespace
+use App\Models\EvaluationReponse;  // Correction du namespace
+use App\Models\Demande;
+use App\Models\Formation;
+use Illuminate\Http\Request;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB; // Ajout pour les transactions
+use Illuminate\Support\Facades\Log;
+
+class EvaluationController extends Controller
+{
+    public function getQuestions($formationId, $type)
+{
+    // Valider le type d'évaluation
+    $validTypes = ['CHAUD', 'FROID'];
+    $type = strtoupper($type);
+    
+    if (!in_array($type, $validTypes)) {
+        return response()->json(['error' => 'Type d\'évaluation invalide'], 400);
+    }
+
+    // Récupérer les questions
+    $questions = EvaluationQuestion::where('id_formation', $formationId)
+        ->where(function($query) use ($type) {
+            $query->where('type', $type)
+                  ->orWhere('type', 'COMMUN');
+        })
+        ->orderBy('ordre')
+        ->get(['id_question as id', 'texte as text', 'ordre']);
+
+    if ($questions->isEmpty()) {
+        return response()->json(['error' => 'Aucune question trouvée pour cette formation'], 404);
+    }
+
+    return response()->json($questions);
+}
+    public function getHotQuestions($formationId)
+    {
+        $questions = EvaluationQuestion::where('id_formation', $formationId)
+            ->where('type', 'CHAUD')
+            ->select('id_question as id', 'texte as text') // Uniformisation des noms
+            ->get();
+
+        return response()->json($questions);
+    }
+
+    public function getColdQuestions($formationId)
+    {
+        $questions = EvaluationQuestion::where('id_formation', $formationId)
+            ->where('type', 'FROID')
+            ->select('id_question as id', 'texte as text') // Uniformisation des noms
+            ->get();
+
+        return response()->json($questions);
+    }
+   
+
+
+public function store(Request $request)
+{
+    DB::beginTransaction();
+
+    try {
+        // Validation
+        $validated = $request->validate([
+            'formation_id' => 'required|integer|exists:formations,id_formation',
+            'type_eval' => 'required|in:CHAUD,FROID',
+            'reponses' => 'required|array|min:1',
+            'reponses.*.question_id' => 'required|integer|exists:evaluation_questions,id_question',
+            'reponses.*.note' => 'required|integer|min:1|max:5'
+        ]);
+
+        $user = auth()->user();
+
+        // Vérification de l'existence d'une évaluation existante
+        $existingEval = Evaluation::where('id_formation', $validated['formation_id'])
+            ->where('id_emp', $user->id_emp)
+            ->where('type_eval', $validated['type_eval'])
+            ->first();
+
+        if ($existingEval) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Vous avez déjà évalué cette formation'
+            ], 422);
+        }
+
+        // Calcul de la moyenne
+        $moyenne = collect($validated['reponses'])->avg('note');
+
+        // Création de l'évaluation principale
+        $evaluation = Evaluation::create([
+            'id_formation' => $validated['formation_id'],
+            'id_emp' => $user->id_emp,
+            'type_eval' => $validated['type_eval'],
+            'rating' => $moyenne,
+            'date' => now()
+        ]);
+
+        // Enregistrement des réponses
+        $reponsesData = [];
+        foreach ($validated['reponses'] as $reponse) {
+            $reponsesData[] = [
+                'id_eval' => $evaluation->id_eval,
+                'id_question' => $reponse['question_id'],
+                'note' => $reponse['note'],
+                'created_at' => now(),
+                'updated_at' => now()
+            ];
+        }
+
+        // Insertion en masse pour plus d'efficacité
+        DB::table('evaluation_reponses')->insert($reponsesData);
+
+        DB::commit();
+
+        // Vérification finale
+        $countReponses = DB::table('evaluation_reponses')
+                         ->where('id_eval', $evaluation->id_eval)
+                         ->count();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Enregistrement réussi',
+            'evaluation_id' => $evaluation->id_eval,
+            'reponses_count' => $countReponses
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        Log::error("Erreur d'enregistrement: " . $e->getMessage());
+        
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur technique: ' . $e->getMessage()
+        ], 500);
+    }
+}
+    
+    private function updateFormationRating($formationId)
+    {
+        $avgRating = Evaluation::where('id_formation', $formationId)
+            ->avg('rating');
+        
+        Formation::where('id_formation', $formationId)
+            ->update(['rating' => $avgRating]);
+    }
+    
+  
+    
+
+
+    public function getEvaluableFormations(Request $request)
+    {
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['error' => 'Non authentifié'], 401);
+        }
+
+        $formations = Formation::whereHas('demandes', function($query) use ($user) {
+                $query->where('id_emp', $user->id_emp)
+                    ->where('statut', 'Validée');
+            })
+            ->with(['evaluations' => function($query) use ($user) {
+                $query->where('id_emp', $user->id_emp);
+            }])
+            ->whereDate('date_fin', '<=', now())
+            ->get()
+            ->map(function($formation) {
+                $hotDone = $formation->evaluations->where('type_eval', 'CHAUD')->isNotEmpty();
+                $coldDone = $formation->evaluations->where('type_eval', 'FROID')->isNotEmpty();
+                $coldAvailable = Carbon::now()->diffInDays(Carbon::parse($formation->date_fin)) >= 30;
+                
+                return [
+                    'id_formation' => $formation->id_formation,
+                    'nom' => $formation->nom,
+                    'date_fin' => $formation->date_fin->format('Y-m-d'),
+                    'hot_eval_done' => $hotDone,
+                    'cold_eval_done' => $coldDone,
+                    'cold_eval_available' => $coldAvailable,
+                    'has_notification' => (!$hotDone || (!$coldDone && $coldAvailable))
+                ];
+            });
+
+        return response()->json($formations);
+    }
+
+    public function storeEvaluation(Request $request)
+    {
+        // Debug: Log la requête entrante
+        \Log::debug("Requête d'évaluation reçue:", $request->all());
+    
+        $validated = $request->validate([
+            'formation_id' => 'required|exists:formations,id_formation',
+            'type' => 'required|in:CHAUD,FROID',
+            'comment' => 'nullable|string|max:500',
+            'reponses' => 'required|array',
+            'reponses.*' => 'integer|between:1,5'
+        ]);
+    
+        \Log::debug("Données validées:", $validated);
+    
+        $user = $request->user();
+        if (!$user) {
+            \Log::error("Utilisateur non authentifié");
+            return response()->json(['error' => 'Non authentifié'], 401);
+        }
+    
+        // Vérifier que l'employé a bien suivi cette formation
+        $demande = Demande::where('id_emp', $user->id_emp)
+            ->where('id_formation', $validated['formation_id'])
+            ->where('statut', 'Validée')
+            ->first();
+    
+        if (!$demande) {
+            \Log::warning("Demande non trouvée ou non validée", [
+                'user_id' => $user->id_emp,
+                'formation_id' => $validated['formation_id']
+            ]);
+            return response()->json(['message' => 'Vous n\'avez pas suivi cette formation ou elle n\'a pas été validée'], 422);
+        }
+    
+        // Vérifier qu'il n'a pas déjà évalué cette formation
+        $existingEvaluation = Evaluation::where('id_emp', $user->id_emp)
+            ->where('id_formation', $validated['formation_id'])
+            ->where('type_eval', $validated['type'])
+            ->first();
+    
+        if ($existingEvaluation) {
+            \Log::warning("Évaluation existante", ['evaluation' => $existingEvaluation]);
+            return response()->json(['message' => 'Vous avez déjà évalué cette formation'], 422);
+        }
+    
+        // Pour évaluation à froid, vérifier que 30 jours se sont écoulés
+        if ($validated['type'] === 'FROID') {
+            $formation = Formation::find($validated['formation_id']);
+            $daysSinceEnd = now()->diffInDays($formation->date_fin);
+            if ($daysSinceEnd < 30) {
+                \Log::warning("Évaluation à froid trop tôt", [
+                    'days_since_end' => $daysSinceEnd,
+                    'date_fin' => $formation->date_fin
+                ]);
+                return response()->json([
+                    'message' => 'L\'évaluation à froid n\'est disponible que 30 jours après la fin de la formation'
+                ], 422);
+            }
+        }
+    
+        // Calculer la moyenne
+        $moyenne = array_sum($validated['reponses']) / count($validated['reponses']);
+    
+        // Créer l'évaluation principale
+        $evaluation = Evaluation::create([
+            'date' => now(),
+            'rating' => $moyenne,
+            'type_eval' => $validated['type'],
+            'commentaire' => $validated['comment'],
+            'id_emp' => $user->id_emp,
+            'id_formation' => $validated['formation_id']
+        ]);
+    
+        \Log::debug("Évaluation créée:", $evaluation->toArray());
+    
+        // Enregistrer les réponses individuelles
+        foreach ($validated['reponses'] as $questionId => $note) {
+            EvaluationReponse::create([
+                'id_eval' => $evaluation->id_eval,
+                'id_question' => $questionId,
+                'note' => $note
+            ]);
+        }
+    
+        \Log::info("Évaluation enregistrée avec succès", [
+            'evaluation_id' => $evaluation->id,
+            'user_id' => $user->id_emp
+        ]);
+    
+        return response()->json([
+            'message' => 'Évaluation enregistrée avec succès',
+            'evaluation' => $evaluation
+        ]);
+    }
+}
