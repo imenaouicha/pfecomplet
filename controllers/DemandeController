@@ -1,0 +1,152 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\Demande; // Ajoutez cette ligne
+use App\Models\Formation; // Ajoutez cette ligne
+use Illuminate\Support\Facades\Auth;
+
+
+class DemandeController extends Controller
+{
+    
+
+
+   public function index()
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Non authentifié'], 401);
+        }
+
+        $demandes = Demande::where('demandes.id_emp', $user->id_emp)
+            ->with(['formation' => function ($query) {
+                $query->select('id_formation', 'nom');
+            }])
+            ->join('employes', 'demandes.id_emp', '=', 'employes.id_emp')
+            ->select(
+                'demandes.id_demande',
+                'demandes.id_formation',
+                'demandes.id_emp',
+                'demandes.statut',
+                'demandes.created_at as date_demande',
+                'employes.nom',
+                'employes.prenom'
+            )
+            ->get()
+            ->map(function ($demande) {
+                return [
+                    'id_demande' => $demande->id_demande,
+                    'nom' => $demande->nom,
+                    'prenom' => $demande->prenom,
+                    'formation' => $demande->formation ? $demande->formation->nom : 'Nom non disponible',
+                    'statut' => $demande->statut,
+                    'date_demande' => $demande->date_demande ? $demande->date_demande->toISOString() : null,
+                ];
+            });
+
+        \Log::info('Réponse API /api/demandes:', ['demandes' => $demandes->toArray()]);
+
+        return response()->json($demandes);
+    }
+
+    public function store(Request $request)
+    {
+        try {
+            $employe = auth()->user();
+            if (!$employe) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Employé non authentifié'
+                ], 401);
+            }
+
+            $validated = $request->validate([
+                'id_formation' => 'required|exists:formations,id_formation'
+            ]);
+
+            $existing = Demande::where('id_emp', $employe->id_emp)
+                ->where('id_formation', $validated['id_formation'])
+                ->exists();
+
+            if ($existing) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Vous avez déjà demandé cette formation'
+                ], 409);
+            }
+
+            $demande = Demande::create([
+                'id_emp' => $employe->id_emp,
+                'id_formation' => $validated['id_formation'],
+                'statut' => 'En attente'
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id_demande' => $demande->id_demande,
+                    'formation' => $demande->formation->nom,
+                    'date_demande' => $demande->created_at->toISOString(),
+                    'statut' => $demande->statut
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Erreur création demande : ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur technique'
+            ], 500);
+        }
+    }
+    /**
+     * Display a listing of the resource.
+     */
+   
+
+    /**
+     * Show the form for creating a new resource.
+     */
+    public function create()
+    {
+        //
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    
+    /**
+     * Display the specified resource.
+     */
+    public function show(string $id)
+    {
+        //
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(string $id)
+    {
+        //
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(Request $request, string $id)
+    {
+        //
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(string $id)
+    {
+        //
+    }
+}
