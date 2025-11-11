@@ -1,0 +1,343 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Formation;
+use App\Models\Categorie; 
+use Illuminate\Http\Request;
+
+class FormationController extends Controller
+{
+    public function addFormation(Request $request)
+    {
+        
+       
+        $validator = Validator::make($request->all(),[
+           
+            'nom'=>'required|max:191',
+            'description'=>'required|max:1000',
+            'nom_formateur'=>'required|max:191',
+            'date_debut'=>'required|date',
+            'date_fin'=>'required|date|after:date_debut',
+            'capacite'=>'required|integer|min:1',
+            'categorie_id'=>'required|exists:categories,id',
+           
+        ]);
+        if( $validator->fails()){
+           
+             return response()->json([
+                'status'=>400,
+                'errors'=> $validator->messages()
+             ]);
+        }else{
+            $formation=new Formation();
+
+        
+         $formation->nom = $request->input('nom');
+         $formation->description = $request->input('description');
+         $formation->nom_formateur = $request->input('nom_formateur');
+         $formation->date_debut = $request->input('date_debut');
+         $formation->date_fin = $request->input('date_fin');
+         $formation->capacite = $request->input('capacite');
+         $formation->categorie_id = $request->input('categorie_id');
+        
+        $formation->save();
+        return response()->json([
+            'status'=>200,
+            'message'=> 'Formation ajouter avec succès'
+         ]);
+        }
+        
+    }
+    
+   public function fetchFormation(Request $request)
+{
+    try {
+        $query = Formation::with('categorie');
+        
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('nom', 'like', "%$search%")
+                  ->orWhere('description', 'like', "%$search%")
+                  ->orWhere('nom_formateur', 'like', "%$search%")
+                  ->orWhere('date_debut', 'like', "%$search%")
+                  ->orWhere('date_fin', 'like', "%$search%")
+                  ->orWhere('capacite', 'like', "%$search%")
+                  ->orWhereHas('categorie', function ($query) use ($search) {
+                      $query->where('nom', 'like', "%$search%");
+                  });
+            });
+        }
+        
+        $formations = $query->get();
+        
+        return response()->json([
+            'message' => $formations->isEmpty() ? "Aucune formation trouvée" : "",
+            'formation' => $formations
+        ]);
+    } catch (\Exception $e) {
+        \Log::error('Error fetching formations: ' . $e->getMessage());
+        return response()->json([
+            'message' => 'Erreur serveur lors de la récupération des formations',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+    
+       public function editFormation($id_Formation){
+         $formation=  formation::findOrFail($id_Formation);
+         if($formation){
+            return response()->json([
+               'status'=>200,
+               'formation'=>$formation
+            ]);
+         }else{
+             return response()->json([
+                'status'=>404,
+                'message'=>'formation introuvable'
+             ]);
+            }
+            
+        }    
+        public function updateFormation(Request $request ,$id_Formation){
+            $validator = Validator::make($request->all(),[
+                
+            'nomF'=>'required|max:191',
+            'description'=>'required|max:1000',
+            'nom_formateur'=>'required|max:191',
+            'date_debut'=>'required|date',
+            'date_fin'=>'required|date|after:date_debut',
+            'capacite'=>'required|max:191',
+            'categorie_id'=>'required|exists:categories,id',
+            ]);
+            
+            if( $validator->fails()){
+               
+                return response()->json([
+                   'status'=>400,
+                   'errors'=> $validator->messages()
+                ]);
+           }else{
+             
+               $formation=formation::find($id_Formation);
+   
+               if($formation){
+                $formation->nom = $request->input('nomF');
+                $formation->description = $request->input('description');
+                $formation->nom_formateur = $request->input('nom_formateur');
+                $formation->date_debut = $request->input('date_debut');
+                $formation->date_fin = $request->input('date_fin');
+                $formation->capacite = $request->input('capacite');
+                $formation->categorie_id = $request->input('categorie_id');
+               
+                 $formation->save();
+
+                    return response()->json([
+                      'status'=>200,
+                      'message'=> 'Formation modifiée avec succès'
+                    ]);
+               }
+               else{
+                    return response()->json([
+                        'status'=>404,
+                        'message'=> 'Formation introuvable'
+                    ]);
+                }
+           
+           }
+           
+        }
+       
+    public function deleteFormation($id_Formation){
+       $formation=formation::find($id_Formation);
+       if($formation){
+           
+       
+        $formation->delete();
+        return response()->json([
+           'status'=>200,
+           'message'=>'Formation supprimée avec succès'
+        ]);
+       }else{
+        return response()->json([
+          'status'=>404,
+           'message'=>'Formation introuvalbe'
+        ]);
+       }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   
+    public function getFormationsWithStatus()
+{
+    $userId = auth()->id();
+    
+    $formations = Formation::with(['demandes' => function($query) use ($userId) {
+            $query->where('id_emp', $userId);
+        }])
+        ->with(['evaluations' => function($query) use ($userId) {
+            $query->where('id_emp', $userId);
+        }])
+        ->get()
+        ->map(function($formation) {
+            $demande = $formation->demandes->first();
+            $statut = $demande ? $demande->statut : 'Non demandée';
+            
+            return [
+                'id_formation' => $formation->id_formation,
+                'nom' => $formation->nom,
+                'description' => $formation->description,
+                'date_debut' => $formation->date_debut,
+                'date_fin' => $formation->date_fin,
+                'statut' => $statut,
+                'eval_immediate_done' => $formation->evaluations->contains('type_eval', 'CHAUD'),
+                'eval_froide_done' => $formation->evaluations->contains('type_eval', 'FROID')
+            ];
+        });
+    
+    return response()->json($formations);
+}// Quand une formation est marquée comme terminée
+public function markAsCompleted($formationId)
+{
+    $formation = Formation::find($formationId);
+    $formation->update(['completed' => true]);
+    
+    // Envoyer une notification (vous pouvez utiliser un événement ou faire directement)
+    $this->createNotification($formationId, 'La formation est terminée, veuillez évaluer');
+    
+    return response()->json(['success' => true]);
+}
+
+   // Récupérer les formations par catégorie
+     public function getByCategory($categoryId)
+     {
+         $formations = Formation::where('categorie_id', $categoryId)->get();
+         return response()->json($formations);
+     }
+ 
+     // Récupérer les détails d'une formation
+     public function getFormationDetails($formationId)
+     {
+         $formation = Formation::findOrFail($formationId);
+         return response()->json($formation);
+     }
+ 
+     // Soumettre une demande
+     public function submitDemande(Request $request)
+     {
+         $request->validate([
+             'id_emp' => 'required|exists:employes,id_emp',
+             'id_formation' => 'required|exists:formations,id_formation',
+         ]);
+ 
+         $demande = Demande::create([
+             'id_emp' => $request->id_emp,
+             'id_formation' => $request->id_formation,
+             'statut' => 'En attente',
+         ]);
+ 
+         return response()->json(['message' => 'Demande soumise avec succès !', 'demande' => $demande]);
+     }
+     public function myEvaluations()
+{
+    return auth()->user()->evaluations()->get();
+}
+    public function index()
+    {
+        return Formation::orderBy('date_debut', 'desc')->get();
+
+        $formations = Formation::with('categorie')->get();
+        return view('employe.formations', compact('formations'));
+    }
+
+    public function show($id)
+    {
+        $formation = Formation::with('categorie')->findOrFail($id);
+        return view('employe.formation-details', compact('formation'));
+    }
+    
+
+public function getDetails(Formation $formation)
+{
+    return response()->json([
+        'id' => $formation->id,
+        'titre' => $formation->titre,
+        'description' => $formation->description,
+        // ... autres champs
+    ]);
+}
+// app/Http/Controllers/FormationController.php
+public function getEvaluableFormations(Request $request)
+{
+    $user = $request->user();
+    
+    if (!$user) {
+        return response()->json(['error' => 'Non authentifié'], 401);
+    }
+
+    $formations = Formation::with(['demandes' => function($query) use ($user) {
+            $query->where('id_emp', $user->id_emp);
+        }])
+        ->with(['evaluations' => function($query) use ($user) {
+            $query->where('id_emp', $user->id_emp);
+        }])
+        ->get()
+        ->map(function($formation) {
+            $demande = $formation->demandes->first();
+            $statut = $demande ? $demande->statut : 'Non demandée';
+            
+            $endDate = Carbon::parse($formation->date_fin);
+            $now = Carbon::now();
+            $isCompleted = $now->greaterThanOrEqualTo($endDate);
+            $isColdEvalAvailable = $now->diffInDays($endDate) >= 30;
+            
+            $hotEvalDone = $formation->evaluations->contains('type_eval', 'CHAUD');
+            $coldEvalDone = $formation->evaluations->contains('type_eval', 'FROID');
+            
+            return [
+                'id_formation' => $formation->id_formation,
+                'nom' => $formation->nom,
+                'date_fin' => $formation->date_fin,
+                'statut' => $statut,
+                'hot_available' => ($statut === 'Validée' && $isCompleted && !$hotEvalDone),
+                'cold_available' => ($statut === 'Validée' && $isColdEvalAvailable && !$coldEvalDone),
+                'hot_done' => $hotEvalDone,
+                'cold_done' => $coldEvalDone
+            ];
+        });
+
+    return response()->json($formations);
+}
+    
+  
+    
+     
+      
+       
+   
+}
