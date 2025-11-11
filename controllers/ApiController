@@ -1,0 +1,34 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\Employe;
+
+class ApiController extends Controller
+{
+    public function login(Request $request)
+    {
+        $employe = Employe::where('email', $request->email)
+            ->where('mdp', $request->password)
+            ->first();
+
+        if ($employe) {
+            return response()->json([
+                'success' => true,
+                'role' => $employe->role,
+                'redirect' => 'employe.html'
+            ]);
+        }
+
+        return response()->json(['success' => false], 401);
+    }
+
+    public function getEmployeData()
+    {
+        return response()->json([
+            'formations' => [],
+            'demandes' => []
+        ]);
+    }
+}
