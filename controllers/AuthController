@@ -1,0 +1,144 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\Employe;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
+
+class AuthController extends Controller
+{
+    // Afficher le formulaire de connexion
+    public function showLoginForm()
+    {
+        return view('auth.login');
+    }
+
+    public function login(Request $request)
+    {
+        $credentials = $request->validate([
+            'email' => 'required|email',
+            'mdp' => 'required'
+        ]);
+    
+        // Trouver l'utilisateur d'abord
+        $employe = Employe::where('email', $credentials['email'])->first();
+    
+        // Vérifier si l'utilisateur existe et le mot de passe
+        if (!$employe || !Hash::check($credentials['mdp'], $employe->mdp)) {
+            return back()->withErrors([
+                'email' => 'Identifiants incorrects',
+            ])->onlyInput('email');
+        }
+    
+        // Authentifier l'utilisateur
+        Auth::login($employe);
+    
+        // Redirection basée sur le rôle
+        switch ($employe->role) {
+            case 'administrateur':
+                return redirect()->intended(route('admin.dashboard'));
+            case 'responsable':
+                return redirect()->intended(route('responsable.dashboard'));
+            case 'employe':
+                return redirect()->intended(route('employe.dashboard'));
+            default:
+                return redirect('/');
+        }
+    }
+
+    // Déconnexion
+    public function logout()
+    {
+        Auth::logout(); // Déconnecter l'utilisateur
+        return redirect()->route('login');
+    }
+
+    // Afficher le formulaire de changement de mot de passe
+    public function showChangePasswordForm()
+    {
+        return view('auth.change_password');
+    }
+
+    public function changePassword(Request $request)
+    {
+        $request->validate([
+            'current_password' => 'required',
+            'new_password' => 'required|min:5|confirmed',
+        ], [
+            'new_password.min' => 'Le mot de passe doit contenir au moins 5 caractères',
+            'new_password.confirmed' => 'Les mots de passe ne correspondent pas'
+        ]);
+    
+        $employe = Auth::user();
+    
+        if (!$employe) {
+            return redirect()->route('login')->with('error', 'Session expirée');
+        }
+    
+        if (!Hash::check($request->current_password, $employe->mdp)) {
+            return back()->withErrors(['current_password' => 'Mot de passe actuel incorrect']);
+        }
+    
+        // Sauvegarder le nouveau mot de passe
+        $newPassword = $request->new_password;
+        $employe->mdp = Hash::make($newPassword);
+        $employe->save();
+    
+        // Stocker les infos temporairement en session
+        $request->session()->put('temp_auth', [
+            'email' => $employe->email,
+            'password' => $newPassword,
+            'role' => $employe->role
+        ]);
+    
+        Auth::logout();
+    
+        return redirect()->route('password.changed')->with([
+            'success' => 'Mot de passe changé avec succès'
+        ]);
+    }
+    public function relogin(Request $request)
+{
+    // Récupérer les infos temporaires
+    $tempAuth = $request->session()->get('temp_auth');
+    
+    if (!$tempAuth) {
+        return redirect()->route('login')->with('error', 'Session expirée');
+    }
+
+    // Tentative de connexion
+    if (Auth::attempt([
+        'email' => $tempAuth['email'],
+        'password' => $tempAuth['password']
+    ])) {
+        // Nettoyer la session
+        $request->session()->forget('temp_auth');
+        
+        // Redirection selon le rôle
+        switch ($tempAuth['role']) {
+            case 'employe':
+                return redirect()->route('employe.dashboard');
+            case 'responsable':
+                return redirect()->route('responsable.dashboard');
+            case 'administrateur':
+                return redirect()->route('admin.dashboard');
+            default:
+                return redirect()->route('login');
+        }
+    }
+
+    return redirect()->route('login')->with('error', 'Échec de la reconnexion automatique');
+}
+public function showPasswordChanged()
+{
+    if (!session('success')) {
+        return redirect()->route('login');
+    }
+
+    return view('auth.password_changed', [
+        'role' => session('role')
+    ]);
+}
+}
