@@ -1,0 +1,32 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up()
+    {
+        Schema::create('employes', function (Blueprint $table) {
+            $table->id('id_emp');
+            $table->string('matricule', 20)->unique();
+            $table->string('nom', 100);
+            $table->string('prenom', 100);
+            $table->string('imageE');
+            $table->string('mdp');
+            $table->date('date_naissance');
+            $table->string('lieu_naissance', 150);
+            $table->string('departement', 100);
+            $table->string('poste', 100);
+            $table->string('email', 150)->unique();
+            $table->string('tel', 20);
+            $table->enum('role', ['employe', 'responsable', 'administrateur'])->default('employe');
+            $table->timestamps();
+        });
+    }
+
+    public function down()
+    {
+        Schema::dropIfExists('employes');
+    }
+};
