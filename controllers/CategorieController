@@ -1,0 +1,246 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Categorie;
+use Illuminate\Http\Request;
+
+class CategorieController extends Controller
+{
+ 
+        public function fetchCat(Request $request) {
+            $query = Categorie::query();
+        
+            if ($request->has('search') && !empty($request->search)) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('nom', 'like', "%$search%");
+                     
+                        });
+            }
+        
+            $categories = $query->get();
+        
+            return response()->json([
+                'message' => $categories->isEmpty() ? "Aucune categorie trouvée" : "",
+                'categorie' => $categories
+            ]);
+        }
+        
+           public function editCat($id_cat){
+             $categorie=  Categorie::findOrFail($id_cat);
+             if($categorie){
+                return response()->json([
+                   'status'=>200,
+                   'categorie'=>$categorie
+                ]);
+             }else{
+                 return response()->json([
+                    'status'=>404,
+                    'message'=>'categorie introuvable'
+                 ]);
+                }
+                
+            }    
+           public function addCat(Request $request)
+{
+    $validator = Validator::make($request->all(), [
+        'nomC' => 'required|max:30',
+        'imageC' => 'required|image|mimes:jpeg,jpg,png|max:2048',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'status' => 400,
+            'errors' => $validator->messages()
+        ]);
+    }
+
+    $categorie = new Categorie();
+    $categorie->nom = $request->input('nomC');
+
+    if ($request->hasFile('imageC')) {
+        $file = $request->file('imageC');
+        $extension = $file->getClientOriginalExtension();
+        $filename = time() . '.' . $extension;
+        $file->move(public_path('images/categories'), $filename);
+        $categorie->imageC = $filename;
+    }
+
+    $categorie->save();
+    return response()->json([
+        'status' => 200,
+        'message' => 'Categorie ajoutée avec succès'
+    ]);
+}
+
+public function updateCat(Request $request, $id_cat)
+{
+    $validator = Validator::make($request->all(), [
+        'nomC' => 'required|max:30',
+        'imageC' => 'sometimes|image|mimes:jpeg,jpg,png|max:2048',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'status' => 400,
+            'errors' => $validator->messages()
+        ]);
+    }
+
+    $categorie = Categorie::find($id_cat);
+    if (!$categorie) {
+        return response()->json([
+            'status' => 404,
+            'message' => 'Categorie introuvable'
+        ]);
+    }
+
+    $categorie->nom = $request->input('nomC');
+
+    if ($request->hasFile('imageC')) {
+        // Delete old image if exists
+        if ($categorie->imageC && file_exists(public_path('images/categories/' . $categorie->imageC))) {
+            unlink(public_path('images/categories/' . $categorie->imageC));
+        }
+        $file = $request->file('imageC');
+        $extension = $file->getClientOriginalExtension();
+        $filename = time() . '.' . $extension;
+        $file->move(public_path('images/categories'), $filename);
+        $categorie->imageC = $filename;
+    }
+
+    $categorie->save();
+    return response()->json([
+        'status' => 200,
+        'message' => 'Categorie modifiée avec succès'
+    ]);
+}
+
+public function deleteCat($id_cat)
+{
+    $categorie = Categorie::find($id_cat);
+    if (!$categorie) {
+        return response()->json([
+            'status' => 404,
+            'message' => 'Categorie introuvable'
+        ]);
+    }
+
+    if ($categorie->imageC && file_exists(public_path('images/categories/' . $categorie->imageC))) {
+        unlink(public_path('images/categories/' . $categorie->imageC));
+    }
+
+    $categorie->delete();
+    return response()->json([
+        'status' => 200,
+        'message' => 'Categorie supprimée avec succès'
+    ]);
+}
+           
+       
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
+       
+           
+       
+
+
+
+
+
+
+
+
+
+
+
+
+    
+    // Afficher la liste des catégories
+    public function index()
+    {
+        $categories = Categorie::all();
+        return view('categories.index', compact('categories'));
+    }
+
+    // Afficher le formulaire de création d'une catégorie
+    public function create()
+    {
+        return view('categories.create');
+    }
+
+    public function store(Request $request)
+{
+    $validated = $request->validate([
+        'titre' => 'required|unique:categories|max:100',
+        'imageC' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048'
+    ]);
+
+    $imageName = time().'.'.$request->imageC->extension();  
+    $request->imageC->move(public_path('images/categories'), $imageName);
+
+    Categorie::create([
+        'titre' => $request->titre,
+        'imageC' => $imageName
+    ]);
+
+    return back()->with('success', 'Catégorie créée avec succès');
+}
+
+    // Afficher les détails d'une catégorie
+    public function show(Categorie $categorie)
+    {
+        return view('categories.show', compact('categorie'));
+    }
+
+    // Afficher le formulaire d'édition d'une catégorie
+    public function edit(Categorie $categorie)
+    {
+        return view('categories.edit', compact('categorie'));
+    }
+
+    // Mettre à jour une catégorie
+    public function update(Request $request, Categorie $categorie)
+    {
+        $request->validate([
+            'titre' => 'required|string|max:100',
+            'imagec' => 'nullable|string',
+        ]);
+
+        $categorie->update($request->all());
+        return redirect()->route('categories.index')->with('success', 'Catégorie mise à jour avec succès.');
+    }
+
+    // Supprimer une catégorie
+    public function destroy(Categorie $categorie)
+    {
+        $categorie->delete();
+        return redirect()->route('categories.index')->with('success', 'Catégorie supprimée avec succès.');
+    }
+  
+       
+        
+             
+           
+           
+   
+        
+}
