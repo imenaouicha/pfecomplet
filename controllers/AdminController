@@ -1,0 +1,467 @@
+<?php
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use App\Models\Employe;
+use App\Models\Categorie;
+use App\Models\Formation;
+use App\Models\Demande;
+use App\Models\EvaluationReponse;
+
+class AdminController extends Controller
+{
+
+
+public function store(Request $request)
+{
+    $validated = $request->validate([
+        'id_formation' => 'required|exists:formations,id',
+        'nom_complet' => 'required|string',
+        'email' => 'required|email',
+        'telephone' => 'required|string',
+    ]);
+
+    $demande = Demande::create([
+        'id_formation' => $validated['id_formation'],
+        'nom_complet' => $validated['nom_complet'],
+        'email' => $validated['email'],
+        'telephone' => $validated['telephone'],
+        'statut' => 'Validée', // Statut par défaut
+        'created_at' => now(),
+    ]);
+
+    // Charger la formation associée pour la réponse
+    $demande->load('formation');
+
+    return response()->json([
+        'success' => true,
+        'data' => $demande,
+        'message' => 'Demande enregistrée avec succès'
+    ], 201);
+}
+
+
+
+
+    
+public function listData()
+{
+    $responsable = Auth::user();
+
+    if (!$responsable) {
+        return redirect()->route('login');
+    }
+
+    // Fetch employees based on role
+    $employes = Employe::whereIn('role', ['responsable', 'employe'])->get();
+
+    // Fetch demands for employees with roles 'responsable' or 'employe'
+    $demandes = Demande::with(['employe', 'formation'])
+        ->whereHas('employe', function ($query) {
+            $query->whereIn('role', ['responsable', 'employe']);
+        })
+        ->get()
+        ->map(function ($demande) {
+            return [
+                'id_demande' => $demande->id_demande,
+                'nom' => $demande->employe->nom,
+                'prenom' => $demande->employe->prenom,
+                'formation' => $demande->formation->nom,
+                'date_demande' => $demande->created_at->format('d/m/Y H:i'),
+                'statut' => $demande->statut
+            ];
+        });
+
+    $formations = Formation::all();
+    $categories = Categorie::all();
+
+    return view('admin.index', [
+        'employe' => $responsable,
+        'employes' => $employes,
+        'formations' => $formations,
+        'demandes' => $demandes,
+        'categories' => $categories,
+        'totalEmployes' => $employes->count(),
+        'totalDemandes' => $demandes->count(),
+        'totalFormation' => $formations->count(),
+        'totalCategorie' => $categories->count()
+    ]);
+}
+
+public function acceptDemande($id_demande)
+{
+    $demande = Demande::findOrFail($id_demande);
+    
+    // Vérifier si la demande est déjà traitée
+    if ($demande->statut !== 'En attente') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Cette demande a déjà été traitée'
+        ], 400);
+    }
+
+    // Récupérer la formation associée
+    $formation = Formation::findOrFail($demande->id_formation);
+    
+    // Compter le nombre de demandes validées pour cette formation
+    $nbAcceptees = Demande::where('id_formation', $formation->id)
+        ->where('statut', 'Validée')
+        ->count();
+
+    // Vérifier si la capacité est atteinte
+    if ($nbAcceptees >= $formation->capacite) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Capacité maximale atteinte pour cette formation'
+        ], 400);
+    }
+
+    // Accepter la demande
+    $demande->statut = 'Validée';
+    $demande->save();
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Demande acceptée avec succès'
+    ]);
+}
+
+public function rejectDemande($id_demande)
+{
+    $demande = Demande::findOrFail($id_demande);
+    $demande->statut = 'Refusée';
+    $demande->save();
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Demande refusée avec succès'
+    ]);
+}
+
+public function search(Request $request)
+{
+    $responsable = Auth::user();
+
+    $output = "";
+    $employes = Employe::whereIn('role', ['responsable', 'employe'])
+        ->where(function ($query) use ($request) {
+            $query->where('nom', 'like', '%' . $request->search . '%')
+                ->orWhere('prenom', 'like', '%' . $request->search . '%')
+                ->orWhere('matricule', 'like', '%' . $request->search . '%');
+        })
+        ->get();
+
+    foreach ($employes as $employe) {
+        $output .= '<tr>
+            <td>' . $employe->matricule . '</td>
+            <td>' . $employe->nom . '</td>
+            <td>' . $employe->prenom . '</td>
+            <td>' . $employe->departement . '</td>
+            <td>' . $employe->email . '</td>
+            <td>' . $employe->tel . '</td>
+        </tr>';
+    }
+
+    return response($output);
+}
+
+public function search_demande(Request $request)
+{
+    $responsable = Auth::user();
+
+    $output = "";
+    $demandes = Demande::with(['employe', 'formation'])
+        ->whereHas('employe', function ($query) {
+            $query->whereIn('role', ['responsable', 'employe']);
+        })
+        ->where(function ($query) use ($request) {
+            $query->whereHas('employe', function ($q) use ($request) {
+                $q->where('nom', 'like', '%' . $request->search . '%')
+                    ->orWhere('prenom', 'like', '%' . $request->search . '%');
+            })
+                ->orWhereHas('formation', function ($q) use ($request) {
+                    $q->where('nom', 'like', '%' . $request->search . '%');
+                });
+        })
+        ->get()
+        ->map(function ($demande) {
+            return [
+                'id_demande' => $demande->id,
+                'nom' => $demande->employe->nom,
+                'prenom' => $demande->employe->prenom,
+                'formation' => $demande->formation->nom,
+                'date_demande' => $demande->date_demande,
+                'statut' => $demande->statut
+            ];
+        });
+
+    foreach ($demandes as $demande) {
+        $output .= '<tr>
+            <td>' . $demande['nom'] . '</td>
+            <td>' . $demande['prenom'] . '</td>
+            <td>' . $demande['formation'] . '</td>
+            <td>' . $demande['date_demande'] . '</td>
+            <td>' . $demande['statut'] . '</td>
+            <td>
+                <a href="#" class="btn accepter" data-id="' . $demande['id_demande'] . '">Accepter</a>
+                <a href="#" class="btn refuser" data-id="' . $demande['id_demande'] . '">Refuser</a>
+            </td>
+        </tr>';
+    }
+
+    return response($output);
+}
+
+public function getDemandes()
+{
+    $user = Auth::user();
+    if (!$user) {
+        return response()->json(['error' => 'Utilisateur non authentifié'], 401);
+    }
+
+    $demandesQuery = Demande::with(['employe', 'formation'])
+        ->orderBy('created_at', 'desc');
+
+    if ($user->role === 'responsable') {
+        $departement = Employe::find($user->id_emp)->departement;
+        $demandesQuery->whereHas('employe', function ($query) use ($departement) {
+            $query->where('departement', $departement);
+        });
+    }
+
+    $demandes = $demandesQuery->get()->map(function ($demande) {
+        return [
+            'id_demande' => $demande->id_demande,
+            'nom' => $demande->employe->nom,
+            'prenom' => $demande->employe->prenom,
+            'role' => $demande->employe->role,
+            'formation' => [
+                'id_formation' => $demande->formation->id_formation,
+                'nom' => $demande->formation->nom,
+            ],
+            'created_at' => $demande->created_at->format('d/m/Y H:i'), // Format as dd/mm/yyyy hh:mm
+            'statut' => $demande->statut
+        ];
+    });
+
+    $demandes = $demandes->unique('id_demande')->values();
+
+    return response()->json(['demandes' => $demandes]);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  public function dashboard()
+{
+    $user = Auth::user();
+    if (!$user) {
+        return redirect()->route('login');
+    }
+    $employe = Employe::find($user->id_emp);
+
+    // Données de base
+    $totalEmployes = Employe::count();
+    $totalDemandes = Demande::count();
+    $totalFormation = Formation::count();
+    $totalCategorie = Categorie::count();
+
+    // Fetch employees with roles 'responsable' or 'employe'
+    $employes = Employe::whereIn('role', ['responsable', 'employe'])->get();
+
+    // Graphique en barres
+    $formationsDemandees = Demande::selectRaw('formations.nom, COUNT(demandes.id_demande) as total')
+        ->join('formations', 'demandes.id_formation', '=', 'formations.id_formation')
+        ->groupBy('formations.nom')
+        ->orderByDesc('total')
+        ->limit(5)
+        ->get()
+        ->toArray();
+
+    $categoriesChart = array_column($formationsDemandees, 'nom');
+    $data = array_column($formationsDemandees, 'total');
+
+    // Graphique linéaire
+    $demandesParMois = Demande::selectRaw('MONTH(created_at) as month, COUNT(id_demande) as total')
+        ->groupBy('month')
+        ->orderBy('month')
+        ->get();
+
+    $months = $demandesParMois->pluck('month')->toArray();
+    $monthlyData = $demandesParMois->pluck('total')->toArray();
+
+    // Graphique circulaire
+    $employesAvecFormation = Demande::distinct('id_emp')->count('id_emp');
+
+    $satisfaits = DB::table('evaluation_reponses')
+        ->select('evaluations.id_emp', DB::raw('AVG(note) as avg_note'))
+        ->join('evaluations', 'evaluation_reponses.id_eval', '=', 'evaluations.id_eval')
+        ->groupBy('evaluations.id_emp')
+        ->having('avg_note', '>', 2.5)
+        ->count();
+
+    $nonSatisfaits = DB::table('evaluation_reponses')
+        ->select('evaluations.id_emp', DB::raw('AVG(note) as avg_note'))
+        ->join('evaluations', 'evaluation_reponses.id_eval', '=', 'evaluations.id_eval')
+        ->groupBy('evaluations.id_emp')
+        ->having('avg_note', '<=', 2.5)
+        ->count();
+
+    $percentNonFait = $totalEmployes > 0 ? round((($totalEmployes - $employesAvecFormation) / $totalEmployes) * 100, 2) : 0;
+    $percentSatisfait = $totalEmployes > 0 ? round(($satisfaits / $totalEmployes) * 100, 2) : 0;
+    $percentNonSatisfait = $totalEmployes > 0 ? round(($nonSatisfaits / $totalEmployes) * 100, 2) : 0;
+
+    $totalPercent = $percentNonFait + $percentSatisfait + $percentNonSatisfait;
+    if ($totalPercent != 100) {
+        $difference = 100 - $totalPercent;
+        $percentNonFait += $difference;
+    }
+
+    $pieData = [
+        ['name' => 'Sans formation', 'y' => $percentNonFait],
+        ['name' => 'Non satisfaits', 'y' => $percentNonSatisfait],
+        ['name' => 'Satisfaits', 'y' => $percentSatisfait],
+    ];
+
+    // Calculer la moyenne des notes pour chaque formation
+    $formations = Formation::with(['evaluations' => function ($query) {
+        $query->select('id_formation', DB::raw('AVG(note) as avg_note'))
+            ->join('evaluation_reponses', 'evaluations.id_eval', '=', 'evaluation_reponses.id_eval')
+            ->groupBy('id_formation');
+    }])->get();
+
+    foreach ($formations as $formation) {
+        if ($formation->evaluations->isNotEmpty()) {
+            $formation->rating = $formation->evaluations->first()->avg_note;
+            $formation->save();
+        }
+    }
+
+    // Ajout des autres données nécessaires pour la vue
+    $categories = Categorie::with('formations')->get();
+    $demandes = Demande::with(['employe', 'formation'])->latest()->get();
+    $evaluations = $user->evaluations()
+        ->with(['formation' => function ($query) {
+            $query->where('date_fin', '<', now());
+        }])
+        ->whereNull('commentaire')
+        ->get();
+
+    return view('admin.index', compact(
+        'user', 'employe', 'employes', 'totalEmployes', 'totalDemandes', 'totalFormation', 'totalCategorie',
+        'categoriesChart', 'data', 'months', 'monthlyData', 'pieData',
+        'categories', 'formations', 'demandes', 'evaluations'
+    ));
+}
+
+    public function index()
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return redirect()->route('login');
+        }
+         // Get the current employee (admin)
+    $employe = Employe::find($user->id_emp);
+    
+    // Get all employees for the list
+    $employes = Employe::all(); // Or use pagination if you have many employees
+        // Calculer les totaux
+        $totalEmployes = Employe::count();
+        $totalDemandes = Demande::count();
+        $totalFormation = Formation::count();
+        $totalResponsables = Employe::where('role', 'responsable')->count();
+        $totalAdmin = Employe::where('role', 'administrateur')->count();
+        $totalCategorie = Categorie::count();
+        
+        // Graphique en barres
+        $formationsDemandees = Demande::selectRaw('formations.nom, COUNT(demandes.id_demande) as total')
+            ->join('formations', 'demandes.id_formation', '=', 'formations.id_formation')
+            ->groupBy('formations.nom')
+            ->orderByDesc('total')
+            ->limit(5)
+            ->get();
+
+        $categories = $formationsDemandees->pluck('nom')->map(function($nom) {
+            return (string) $nom;
+        })->toArray();
+
+        $data = $formationsDemandees->pluck('total')->toArray();
+        
+        // Graphique linéaire
+        $demandesParMois = Demande::selectRaw('MONTH(created_at) as month, COUNT(id_demande) as total')
+            ->groupBy('month') 
+            ->orderBy('month') 
+            ->get();
+
+        $months = $demandesParMois->pluck('month')->toArray();
+        $monthlyData = $demandesParMois->pluck('total')->toArray();
+        
+        // Graphique circulaire - MEME METHODE QUE DASHBOARD()
+        $employesAvecFormation = Demande::distinct('id_emp')->count('id_emp');
+        
+       // Modifiez cette partie dans les deux méthodes dashboard() et index()
+
+// Calcul des satisfaits (note moyenne >= 2.5)
+$satisfaits = DB::table('evaluation_reponses')
+->select('evaluations.id_emp', DB::raw('AVG(note) as avg_note'))
+->join('evaluations', 'evaluation_reponses.id_eval', '=', 'evaluations.id_eval')
+->groupBy('evaluations.id_emp')
+->having('avg_note', '>=', 2.5)
+->count();
+
+// Calcul des non satisfaits (note moyenne < 2.5)
+$nonSatisfaits = DB::table('evaluation_reponses')
+->select('evaluations.id_emp', DB::raw('AVG(note) as avg_note'))
+->join('evaluations', 'evaluation_reponses.id_eval', '=', 'evaluations.id_eval')
+->groupBy('evaluations.id_emp')
+->having('avg_note', '<', 2.5)
+->count();
+
+$percentNonFait = $totalEmployes > 0 ? round((($totalEmployes - $employesAvecFormation) / $totalEmployes) * 100, 2) : 0;
+$percentSatisfait = $totalEmployes > 0 ? round(($satisfaits / $totalEmployes) * 100, 2) : 0;
+$percentNonSatisfait = $totalEmployes > 0 ? round(($nonSatisfaits / $totalEmployes) * 100, 2) : 0;
+
+        // Ajustement pour que la somme fasse exactement 100%
+        $totalPercent = $percentNonFait + $percentSatisfait + $percentNonSatisfait;
+        if ($totalPercent != 100) {
+            $difference = 100 - $totalPercent;
+            $percentNonFait += $difference;
+        }
+
+        $pieData = [
+            ['name' => 'Employés sans formation', 'y' => $percentNonFait],
+            ['name' => 'Employés non satisfaits', 'y' => $percentNonSatisfait],
+            ['name' => 'Employés satisfaits', 'y' => $percentSatisfait],
+        ];
+
+        return view('admin.dashboard', compact(
+            'user', 'totalEmployes', 'employes', 'totalDemandes', 'totalFormation',
+            'totalResponsables', 'totalAdmin', 'totalCategorie',
+            'categories', 'data', 'months', 'monthlyData', 'pieData'
+        ));
+    }
+}
