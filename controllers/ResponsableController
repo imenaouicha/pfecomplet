@@ -1,0 +1,277 @@
+<?php
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use App\Models\Employe;
+use App\Models\Categorie;
+use App\Models\Formation;
+use App\Models\Demande;
+use Illuminate\Support\Facades\DB;
+
+class ResponsableController extends Controller
+{
+    public function listData()
+    {
+        $responsable = Auth::user();
+        
+        if (!$responsable) {
+            return redirect()->route('login');
+        }
+
+        $departement = $responsable->departement;
+
+        // Employés du même département avec rôle 'employe'
+        $employes = Employe::where('departement', $departement)
+                         ->where('role', 'employe')
+                         ->get();
+
+        // Demandes des employés du département avec rôle 'employe'
+        $demandes = Demande::with(['employe', 'formation'])
+            ->whereHas('employe', function($query) use ($departement) {
+                $query->where('departement', $departement)
+                      ->where('role', 'employe');
+            })
+            ->get()
+            ->map(function($demande) {
+                return [
+                    'id_demande' => $demande->id_demande,
+                    'nom' => $demande->employe->nom,
+                    'prenom' => $demande->employe->prenom,
+                    'formation' => $demande->formation->nom,
+                    'date_demande' => $demande->created_at->format('d/m/Y H:i'),
+                    'statut' => $demande->statut
+                ];
+            });
+
+        $categories = Categorie::with('formations')->get();
+        $formations = Formation::all();
+        
+        return view('responsable.index', [
+            'employe' => $responsable,
+            
+            'employes' => $employes,
+            'formations' => $formations,
+            'demandes' => $demandes,
+            'categories' => $categories
+        ]);
+    }
+
+public function accept_demande($id_demande)
+{
+    // Démarrer une transaction
+    DB::beginTransaction();
+
+    try {
+        $responsable = Auth::user();
+        $departement = $responsable->departement;
+
+        // 1. Vérifier que la demande existe et appartient au département
+        $demande = Demande::with(['formation' => function($query) {
+                $query->lockForUpdate(); // Verrouiller la formation
+            }])
+            ->join('employes', 'demandes.id_emp', '=', 'employes.id_emp')
+            ->where('demandes.id_demande', $id_demande)
+            ->where('employes.departement', $departement)
+            ->where('employes.role', 'employe')
+            ->firstOrFail();
+
+        // 2. Vérifier la capacité (avec verrouillage)
+        $nbAcceptees = Demande::where('id_formation', $demande->id_formation)
+                            ->where('statut', 'Validée')
+                            ->count();
+
+        if ($nbAcceptees >= $demande->formation->capacite) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Capacité maximale déjà atteinte pour cette formation',
+                'capacity' => $demande->formation->capacite,
+                'accepted' => $nbAcceptees
+            ], 400);
+        }
+
+        // 3. Valider la demande
+        $demande->statut = 'Validée';
+        $demande->save();
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Demande acceptée avec succès',
+            'remaining_capacity' => $demande->formation->capacite - ($nbAcceptees + 1)
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+public function reject_demande($id_demande)
+{
+    $responsable = Auth::user();
+    $departement = $responsable->departement;
+
+    $demande = Demande::join('employes', 'demandes.id_emp', '=', 'employes.id_emp')
+        ->where('demandes.id_demande', $id_demande)
+        ->where('employes.departement', $departement)
+        ->where('employes.role', 'employe')
+        ->firstOrFail();
+
+    $demande->statut = 'Refusée';
+    $demande->save();
+
+    return response()->json(['message' => 'Demande refusée avec succès']);
+}
+
+    
+   
+
+    public function search(Request $request)
+    {
+        $responsable = Auth::user();
+        $departement = $responsable->departement;
+
+        $output = "";
+        $employes = Employe::where('departement', $departement)
+                         ->where('role', 'employe')
+                         ->where(function($query) use ($request) {
+                             $query->where('nom', 'like', '%'.$request->search.'%')
+                                   ->orWhere('prenom', 'like', '%'.$request->search.'%')
+                                   ->orWhere('matricule', 'like', '%'.$request->search.'%');
+                         })
+                         ->get();
+
+        foreach($employes as $employe) {
+            $output .= '<tr>
+                <td>'.$employe->matricule.'</td>
+                <td>'.$employe->nom.'</td>
+                <td>'.$employe->prenom.'</td>
+                <td>'.$employe->departement.'</td>
+                <td>'.$employe->email.'</td>
+                <td>'.$employe->tel.'</td>
+            </tr>';
+        }
+        
+        return response($output);
+    }
+
+    public function search_demande(Request $request)
+    {
+        $responsable = Auth::user();
+        $departement = $responsable->departement;
+
+        $output = "";
+        $demandes = Demande::with(['employe', 'formation'])
+            ->whereHas('employe', function($query) use ($departement) {
+                $query->where('departement', $departement)
+                      ->where('role', 'employe');
+            })
+            ->where(function($query) use ($request) {
+                $query->whereHas('employe', function($q) use ($request) {
+                        $q->where('nom', 'like', '%'.$request->search.'%')
+                          ->orWhere('prenom', 'like', '%'.$request->search.'%');
+                    })
+                    ->orWhereHas('formation', function($q) use ($request) {
+                        $q->where('nom', 'like', '%'.$request->search.'%');
+                    });
+            })
+            ->get()
+            ->map(function($demande) {
+                return [
+                    'id_demande' => $demande->id_demande,
+                    'nom' => $demande->employe->nom,
+                    'prenom' => $demande->employe->prenom,
+                    'formation' => $demande->formation->nom,
+                    'date_demande' => $demande->created_at->format('d/m/Y H:i'),
+                    'statut' => $demande->statut
+                ];
+            });
+
+        foreach ($demandes as $demande) {
+            $output .= '<tr>
+                <td>'.$demande['nom'].'</td>
+                <td>'.$demande['prenom'].'</td>
+                <td>'.$demande['formation'].'</td>
+                <td>'.$demande['date_demande'].'</td>
+                <td>'.$demande['statut'].'</td>
+                <td>
+                    <form action="'.route('demandes.accept', $demande['id_demande']).'" method="POST" style="display: inline;">
+                        @csrf
+                        <button type="submit" class="btn accepter">Accepter</button>
+                    </form>
+                    <form action="'.route('demandes.reject', $demande['id_demande']).'" method="POST" style="display: inline;">
+                        @csrf
+                        <button type="submit" class="btn refuser">Refuser</button>
+                    </form>
+                </td>
+            </tr>';
+        }
+
+        return response($output);
+    }
+
+    public function getDemandes()
+    {
+        $responsable = Auth::user();
+        $departement = $responsable->departement;
+
+        $demandes = Demande::with(['employe', 'formation'])
+            ->whereHas('employe', function($query) use ($departement) {
+                $query->where('departement', $departement)
+                      ->where('role', 'employe');
+            })
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function($demande) {
+                return [
+                    'id_demande' => $demande->id_demande,
+                    'nom' => $demande->employe->nom,
+                    'prenom' => $demande->employe->prenom,
+                    'formation' => $demande->formation->nom,
+                    'date_demande' => $demande->created_at->toDateTimeString(),
+                    'statut' => $demande->statut
+                ];
+            });
+
+        return response()->json($demandes);
+    }
+
+    public function dashboard()
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return redirect()->route('login');
+        }
+
+        $departement = $user->departement;
+
+        return view('responsable.index', [
+            'employe' => $user,
+            'employes' => Employe::where('departement', $departement)
+                               ->where('role', 'employe')
+                               ->get(),
+            'categories' => Categorie::with('formations')->get(),
+            'demandes' => Demande::with(['employe', 'formation'])
+                               ->whereHas('employe', function($query) use ($departement) {
+                                   $query->where('departement', $departement)
+                                         ->where('role', 'employe');
+                               })
+                               ->latest()
+                               ->get(),
+            'formations' => Formation::all(),
+            'evaluations' => $user->evaluations()
+                ->with(['formation' => function($query) {
+                    $query->where('date_fin', '<', now());
+                }])
+                ->whereNull('commentaire')
+                ->get()
+        ]);
+    }
+}
