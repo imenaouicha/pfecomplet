@@ -1,0 +1,29 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up()
+    {
+        Schema::create('formations', function (Blueprint $table) {
+            $table->id('id_formation');
+            $table->string('nom', 150);
+            $table->text('description');
+            $table->string('nom_formateur', 100);
+            $table->integer('capacite')->unsigned();
+            $table->decimal('rating', 3, 2)->nullable()->default(null);
+
+            $table->dateTime('date_debut');
+            $table->dateTime('date_fin');
+            $table->foreignId('categorie_id')->constrained('categories')->onDelete('cascade');
+            $table->timestamps();
+        });
+    }
+
+    public function down()
+    {
+        Schema::dropIfExists('formations');
+    }
+};
