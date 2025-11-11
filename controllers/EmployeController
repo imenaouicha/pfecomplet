@@ -1,0 +1,403 @@
+<?php
+namespace App\Http\Controllers;
+use App\Models\Formation;
+
+use App\Models\Categorie;
+use App\Models\Employe;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
+
+
+class EmployeController extends Controller
+{
+
+ 
+    
+    public function fetchEmp(Request $request) {
+        $query = Employe::query();
+    
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('matricule', 'like', "%$search%")
+                  ->orWhere('nom', 'like', "%$search%")
+                  ->orWhere('prenom', 'like', "%$search%")
+                  ->orWhere('email', 'like', "%$search%")
+                  ->orWhere('departement', 'like', "%$search%")
+                  ->orWhere('role', 'like', "%$search%");
+            });
+        }
+    
+        $employes = $query->get();
+    
+        return response()->json([
+            'message' => $employes->isEmpty() ? "Aucun employé trouvé" : "",
+            'employe' => $employes
+        ]);
+    }
+    
+       public function editEmp($id_emp){
+         $employe=  Employe::findOrFail($id_emp);
+         if($employe){
+            return response()->json([
+               'status'=>200,
+               'employe'=>$employe
+            ]);
+         }else{
+             return response()->json([
+                'status'=>404,
+                'message'=>'employé introuvable'
+             ]);
+            }
+            
+        }    
+       
+       public function addEmp(Request $request)
+{
+    $validator = Validator::make($request->all(), [
+        'matricule' => 'required|max:191',
+        'nom' => 'required|max:191',
+        'prenom' => 'required|max:191',
+        'mdp' => 'required|min:5',
+        'departement' => 'required|max:191',
+        'tel' => 'required|max:191',
+        'email' => 'required|email|unique:employes,email',
+        'role' => 'required|in:administrateur,employe,responsable',
+        'imageE' => 'required|image|mimes:jpeg,jpg,png|max:2048',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'status' => 400,
+            'errors' => $validator->messages()
+        ]);
+    }
+
+    $employe = new Employe();
+    $employe->matricule = $request->input('matricule');
+    $employe->nom = $request->input('nom');
+    $employe->prenom = $request->input('prenom');
+    $employe->mdp = bcrypt($request->input('mdp'));
+    $employe->date_naissance = $request->input('date_naissance');
+    $employe->lieu_naissance = $request->input('lieu_naissance');
+    $employe->departement = $request->input('departement');
+    $employe->email = $request->input('email');
+    $employe->tel = $request->input('tel');
+    $employe->role = $request->input('role');
+
+    if ($request->hasFile('imageE')) {
+        $file = $request->file('imageE');
+        $extension = $file->getClientOriginalExtension();
+        $filename = time() . '.' . $extension;
+        $file->move(public_path('images/employes'), $filename);
+        $employe->imageE = $filename;
+    }
+
+    $employe->save();
+    return response()->json([
+        'status' => 200,
+        'message' => 'Employé ajouté avec succès'
+    ]);
+}
+
+public function updateEmp(Request $request, $id_emp)
+{
+    $validator = Validator::make($request->all(), [
+        'matricule' => 'required|max:191',
+        'nom' => 'required|max:191',
+        'prenom' => 'required|max:191',
+        'mdp' => 'sometimes|min:5',
+        'departement' => 'required|max:191',
+        'tel' => 'required|max:191',
+        'email' => ['required', 'email', Rule::unique('employes')->ignore($id_emp, 'id_emp')],
+        'role' => 'required|in:administrateur,employe,responsable',
+        'imageE' => 'sometimes|image|mimes:jpeg,jpg,png|max:2048',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'status' => 400,
+            'errors' => $validator->messages()
+        ]);
+    }
+
+    $employe = Employe::find($id_emp);
+    if (!$employe) {
+        return response()->json([
+            'status' => 404,
+            'message' => 'Employé introuvable'
+        ]);
+    }
+
+    $employe->matricule = $request->input('matricule');
+    $employe->nom = $request->input('nom');
+    $employe->prenom = $request->input('prenom');
+    if ($request->filled('mdp')) {
+        $employe->mdp = bcrypt($request->input('mdp'));
+    }
+    $employe->date_naissance = $request->input('date_naissance');
+    $employe->lieu_naissance = $request->input('lieu_naissance');
+    $employe->departement = $request->input('departement');
+    $employe->email = $request->input('email');
+    $employe->tel = $request->input('tel');
+    $employe->role = $request->input('role');
+
+    if ($request->hasFile('imageE')) {
+        if ($employe->imageE && file_exists(public_path('images/employes/' . $employe->imageE))) {
+            unlink(public_path('images/employes/' . $employe->imageE));
+        }
+        $file = $request->file('imageE');
+        $extension = $file->getClientOriginalExtension();
+        $filename = time() . '.' . $extension;
+        \Log::info("Uploading employee image to: " . public_path('images/employes/' . $filename));
+        $file->move(public_path('images/employes'), $filename);
+        \Log::info("Image exists after upload: " . (file_exists(public_path('images/employes/' . $filename)) ? 'Yes' : 'No'));
+        $employe->imageE = $filename;
+    }
+
+    $employe->save();
+    return response()->json([
+        'status' => 200,
+        'message' => 'Employé modifié avec succès'
+    ]);
+}
+
+public function deleteEmp($id_emp)
+{
+    $employe = Employe::find($id_emp);
+    if (!$employe) {
+        return response()->json([
+            'status' => 404,
+            'message' => 'Employé introuvable'
+        ]);
+    }
+
+    if ($employe->imageE && file_exists(public_path('images/employes/' . $employe->imageE))) {
+        unlink(public_path('images/employes/' . $employe->imageE));
+    }
+
+    $employe->delete();
+    return response()->json([
+        'status' => 200,
+        'message' => 'Employé supprimé avec succès'
+    ]);
+}
+    /*public function search(Request $request){
+        $output="";
+        $search = $request->search;
+
+
+        $query->where('matricule','like',"%$search%")
+                 ->orWhere('nom','like',"%$search%")
+                 ->orWhere('prenom','like',"%$search%")
+                 ->orWhere('email','like',"%$search%")
+                 ->orWhere('departement','like',"%$search%")
+                 ->orWhere('role','like',"%$search%")
+                 ->get();
+
+                 foreach ($employes as $employe){
+                    $output.=
+                    '<tr>
+                        <td>'.$employe->nom .'</td>
+                    </tr>';
+                 }
+                 return response($output);
+
+    
+        }*/
+    
+
+
+
+
+
+
+
+
+
+    
+    public function show($id)
+    {
+        $employe = Employe::findOrFail($id);
+        return view('admin', compact('employe'));
+    }
+    
+    public function display(){
+        $employes=  Employe::all();
+        return view ('admin',compact('employes'));
+    }  
+
+  
+ 
+    public function search(Request $request){
+        $output="";
+        $search = $request->search;
+
+
+        $query->where('matricule','like',"%$search%")
+                 ->orWhere('nom','like',"%$search%")
+                 ->orWhere('prenom','like',"%$search%")
+                 ->orWhere('email','like',"%$search%")
+                 ->orWhere('departement','like',"%$search%")
+                 ->orWhere('role','like',"%$search%")
+                 ->get();
+
+                 foreach ($employes as $employe){
+                    $output.=
+                    '<tr>
+                        <td>'.$employe->nom .'</td>
+                    </tr>';
+                 }
+                 return response($output);
+
+    
+        }
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'matricule' => 'required|unique:employes|max:20',
+            'nom' => 'required|max:100',
+            'prenom' => 'required|max:100',
+            'imageE' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048',
+        ]);
+    
+        // Gestion de l'image
+        if ($request->hasFile('imageE')) {
+            $image = $request->file('imageE');
+            $filename = 'emp_'.time().'.'.$image->getClientOriginalExtension();
+            
+            // Debug: Vérifiez le chemin avant déplacement
+            \Log::info("Chemin de destination: ".public_path('images/employes/'.$filename));
+            
+            // Déplacement physique du fichier
+            $image->move(public_path('images/employes'), $filename);
+            
+            // Debug: Vérifiez si le fichier existe après déplacement
+            \Log::info("Fichier existe: ".file_exists(public_path('images/employes/'.$filename)));
+        }
+    
+        Employe::create([
+            'matricule' => $request->matricule,
+            'nom' => $request->nom,
+            'prenom' => $request->prenom,
+            'imageE' => $filename, // Stocke uniquement le nom du fichier
+            // ... autres champs
+        ]);
+    
+        return back()->with('success', 'Employé créé avec succès');
+    }
+    public function profil()
+    {
+        $employe = Auth::user();
+        return view('employe.profil', compact('employe'));
+    }
+   
+    public function dashboard()
+    {
+        // Vérifier si l'utilisateur est authentifié
+        if (!auth()->check()) {
+            return redirect()->route('login');
+        }
+    
+        // Récupérer l'employé authentifié
+        $employe = auth()->user();
+    
+        // Vérifier si l'employé existe
+        if (!$employe) {
+            abort(404, "Employé introuvable");
+        }
+    
+        // Récupérer les demandes de l'employé
+        $demandes = $employe->demandes ?? collect();
+    
+        // Récupérer les catégories avec leurs formations associées
+        $categories = Categorie::with('formations')->get();
+    
+        // Récupérer toutes les formations disponibles
+        $formations = \App\Models\Formation::all(); // Utilisation avec namespace complet
+    
+        // Passer les données nécessaires à la vue
+        return view('employe.index', [
+            'employe' => $employe,
+            'demandes' => $employe->demandes()->with('formation')->latest()->get(),
+            'categories' => Categorie::with('formations')->get(),
+            'evaluations' => $employe->evaluations()
+            ->with(['formation' => function($query) {
+                $query->where('date_fin', '<', now());
+            }])
+            ->whereNull('commentaire')
+            ->get(),
+            'formations' => $formations,
+        ]);
+    }
+    
+    public function storeDemande(Request $request)
+    {
+        $request->validate([
+            'formation_id' => 'required|exists:formations,id_formation'
+        ]);
+    
+        Demande::create([
+            'id_emp' => auth()->id(),
+            'id_formation' => $request->formation_id,
+            'statut' => 'En attente'
+        ]);
+    
+        return redirect()->back()->with('success', 'Demande envoyée avec succès');
+    }
+    
+    public function storeEvaluation(Request $request)
+    {
+        $request->validate([
+            'formation_id' => 'required|exists:formations,id_formation',
+            'rating' => 'required|integer|between:1,5',
+            'type_eval' => 'required|in:CHAUD,FROID',
+            'commentaire' => 'nullable|string'
+        ]);
+    
+        Evaluation::create([
+            'id_emp' => auth()->id(),
+            'id_formation' => $request->formation_id,
+            'rating' => $request->rating,
+            'commentaire' => $request->commentaire,
+            'type_eval' => $request->type_eval,
+            'date' => now()
+        ]);
+    
+        return redirect()->back()->with('success', 'Évaluation enregistrée');
+    }
+public function index()
+{ 
+    return view('empForm');
+}
+
+
+
+   
+
+
+
+}
