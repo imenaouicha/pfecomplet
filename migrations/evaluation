@@ -1,0 +1,27 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up()
+    {
+        Schema::create('evaluations', function (Blueprint $table) {
+            $table->id('id_eval');
+            $table->date('date');
+            $table->integer('rating')->check('rating BETWEEN 1 AND 5');
+            $table->enum('type_eval', ['CHAUD', 'FROID']);
+            $table->text('commentaire')->nullable();
+
+            $table->foreignId('id_emp')->constrained('employes', 'id_emp')->onDelete('cascade');
+            $table->foreignId('id_formation')->constrained('formations', 'id_formation')->onDelete('cascade');
+            $table->timestamps();
+        });
+    }
+
+    public function down()
+    {
+        Schema::dropIfExists('evaluations');
+    }
+};
