@@ -1,0 +1,33 @@
+<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('evaluation_reponses', function (Blueprint $table) {
+            $table->id('id_reponse');
+            $table->unsignedBigInteger('id_eval'); // Doit correspondre à evaluations.id_eval
+            $table->unsignedBigInteger('id_question');
+            $table->tinyInteger('note')->between(1, 5);
+            $table->timestamps();
+        
+            $table->foreign('id_eval')
+                  ->references('id_eval') // Important: correspond à la PK de evaluations
+                  ->on('evaluations')
+                  ->onDelete('cascade');
+        
+            $table->foreign('id_question')
+                  ->references('id_question')
+                  ->on('evaluation_questions')
+                  ->onDelete('cascade');
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('evaluation_reponses');
+    }
+};
