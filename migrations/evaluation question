@@ -1,0 +1,35 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('evaluation_questions', function (Blueprint $table) {
+            $table->id('id_question');
+            $table->unsignedBigInteger('id_formation'); 
+            $table->enum('type', ['CHAUD', 'FROID', 'COMMUN']);
+            $table->string('texte');
+            $table->integer('ordre');
+            $table->timestamps();
+            $table->foreign('id_formation')
+            ->references('id_formation') // Référencez explicitement id_formation
+            ->on('formations')
+            ->onDelete('cascade');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('evaluation_questions');
+    }
+};
