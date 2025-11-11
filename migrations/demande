@@ -1,0 +1,24 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up()
+    {
+        Schema::create('demandes', function (Blueprint $table) {
+            $table->id('id_demande');
+            $table->enum('statut', ['En attente', 'Validée', 'Refusée'])->default('En attente');
+            $table->foreignId('id_emp')->constrained('employes', 'id_emp')->onDelete('cascade');
+            $table->foreignId('id_formation')->constrained('formations', 'id_formation')->onDelete('cascade');
+            $table->timestamps();
+            
+        });
+    }
+
+    public function down()
+    {
+        Schema::dropIfExists('demandes');
+    }
+};
